@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_MODEL = "gpt-3.5-turbo"
+
 DEFAULT_PROMPT = "Say hello."
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_NUM_REQUESTS = 5
@@ -120,26 +120,31 @@ async def send_request(
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": f"{prompt}"}],
         "temperature": 0.0,
-        # "stream": True,
+        "stream": True,
     }
-
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
     request_start_time = time.perf_counter()
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             async with session.post(api_url, headers=headers, json=payload) as response:
                 chunks = []
-                num_tokens = 0
-                async for chunk, _ in response.content.iter_chunks():
+                output_len = 0
+                async for chunk in response.content:
                     if not chunks:
                         time_to_first_token = time.perf_counter() - request_start_time
-                    print(chunk, num_tokens)
-                    num_tokens += 1
-                    chunks.append(chunk)
-            output = b"".join(chunks).decode("utf-8")
-            print(f"OUTPUT:\n{output}")
-            output = json.loads(output)
-            # print(output)
+                    chunk = chunk.decode("utf-8").strip()
+                    if chunk.startswith("data:"):
+                        data = chunk[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        data = json.loads(data)
+                        if data["choices"]:
+                            output_len += 1
+                            content = data["choices"][0]["delta"].get("content")
+                            if content:
+                                chunks.append(content)
+
+            output = "".join(chunks)
             # Re-send the request if it failed.
             if "error" not in output:
                 break
@@ -147,11 +152,13 @@ async def send_request(
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
     REQUEST_LATENCY.append((prompt_len, output_len, request_latency))
-    print(REQUEST_LATENCY, time_to_first_token, num_tokens)
+    # print(REQUEST_LATENCY, time_to_first_token, output_len)
+    print(f"time to first token: {time_to_first_token:.2f} s")
 
 
 async def benchmark(
     api_url: str,
+    model: str,
     headers: dict,
     input_requests: list[tuple[str, int, int]],
     request_rate: float,
@@ -167,20 +174,20 @@ async def benchmark(
 
 
 def main(args: argparse.Namespace):
-    api_url = "https://api.openai.com/v1/chat/completions"
     headers = get_headers(auth_token=os.getenv("OPENAI_API_KEY"))
 
     # tokenizer = get_tokenizer(args.tokenizer, trust_remote_code=args.trust_remote_code)
     # input_requests = sample_requests(args.dataset, args.num_prompts, tokenizer)
 
     # requests: prompt, input_len, output_len
-    input_requests = [(DEFAULT_PROMPT, 3, 4000)]
+    input_requests = [(DEFAULT_PROMPT, 3, 4000)] * 20
 
-    print(input_requests)
     request_rate = 20 / 60  # 20 requests per minute
 
     benchmark_start_time = time.perf_counter()
-    asyncio.run(benchmark(api_url, headers, input_requests, request_rate))
+    asyncio.run(
+        benchmark(args.api_url, args.model, headers, input_requests, request_rate)
+    )
     benchmark_end_time = time.perf_counter()
     benchmark_time = benchmark_end_time - benchmark_start_time
 
@@ -208,23 +215,16 @@ if __name__ == "__main__":
         description="Benchmark the online serving throughput."
     )
     # For local testing, localhost:8000
-    # parser.add_argument(
-    #     "--base-url",
-    #     "-b",
-    #     type=str,
-    #     default=None,
-    #     help="Base URL for the LLM API endpoint",
-    # )
-    # parser.add_argument(
-    #     "--api-key",
-    #     "-k",
-    #     type=str,
-    #     default=None,
-    #     help="API key for the LLM API endpoint",
-    # )
-    # parser.add_argument(
-    #     "--model", "-m", type=str, default=DEFAULT_MODEL, help="Model to benchmark"
-    # )
+    parser.add_argument(
+        "--api-url",
+        "-a",
+        type=str,
+        default="https://api.openai.com/v1/chat/completions",
+        help="Base URL for the LLM API endpoint",
+    )
+    parser.add_argument(
+        "--model", "-m", type=str, default="gpt-3.5-turbo", help="Model to benchmark"
+    )
     # parser.add_argument(
     #     "--max-tokens",
     #     type=int,
@@ -240,7 +240,6 @@ if __name__ == "__main__":
     #     default=1,
     #     help="Generates `best_of` sequences per prompt and " "returns the best one.",
     # )
-    # parser.add_argument("--use-beam-search", action="store_true")
     # parser.add_argument(
     #     "--num-prompts", type=int, default=1000, help="Number of prompts to process."
     # )

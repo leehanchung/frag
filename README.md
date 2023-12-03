@@ -1,10 +1,17 @@
-# FRAG
+# FRAG - Framework for Retrieval Augmented Generation Evaluation and Benchmarking
+
+Introducing FRAG - Framework for Retrieval Augmented Generation evaluating and benchmarking.
 
 Current common LLM evaluation suites are based evaluated based on tasks that are used as proxy for intelligence and based on styles. For example, Grade School Math (GSM8k), Massive Multitask Language Understanding (MMLU, k=5). Or for styles, for examples, LMSys that uses LLM as a proxy for human evaluation. While they might proxy LLM's intelligence, they do not evaluate LLM's capability for production use cases.
 
 For production basis, we would want to evaluate based on their capabilities of their production use cases, specifically, hallucinations, context utilization, instruction following, tool dependents potentials used by LLM applications with production usage in mind.
 
-We want to evaluate based on:
+## Benchmarking LLM API Endpoints
+
+
+
+## Evaluating Factuality Benchmarking online serving throughput for LLM API endpoints.
+
 
 
 1. Context Utilization
@@ -29,5 +36,6 @@ We want to evaluate based on:
 4. Tool usage
 -
 
-data:
-https://txt.cohere.com/embedding-archives-wikipedia/
+# References
+
+- [Reproducible Performance Metrics for LLM inference](https://www.anyscale.com/blog/reproducible-performance-metrics-for-llm-inference)
