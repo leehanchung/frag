@@ -100,13 +100,14 @@ async def get_request(
 
 async def send_request(
     api_url: str,
+    model: str,
     headers: dict,
     prompt: str,
     prompt_len: int,
     output_len: int,
 ) -> None:
     payload = {
-        "model": "gpt-3.5-turbo",
+        "model": model,
         "messages": [{"role": "user", "content": f"{prompt}"}],
         "temperature": 0.0,
         "stream": True,
@@ -162,7 +163,7 @@ async def benchmark(
     async for request in get_request(input_requests, request_rate):
         prompt, prompt_len, output_len = request
         task = asyncio.create_task(
-            send_request(api_url, headers, prompt, prompt_len, output_len)
+            send_request(api_url, args.model, headers, prompt, prompt_len, output_len)
         )
         tasks.append(task)
     await asyncio.gather(*tasks)
