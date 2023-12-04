@@ -6,20 +6,17 @@ import os
 import time
 from collections.abc import AsyncGenerator
 
-import aiohttp
+import httpx
 import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-DEFAULT_PROMPT = "Say hello."
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_PROMPT = "You are a helpful assistant that respeonds with the answer in the most concise possible way."
 DEFAULT_NUM_REQUESTS = 5
-sys_prompt = "You are a helpful assistant that respeonds with the answer in the most concise possible way."
 
-# (prompt len, output len, latency)
-REQUEST_LATENCY: list[tuple[int, int, float]] = []
+REQUEST_LATENCY: list[tuple[int, int, float]] = []  # (prompt len, output len, latency)
 
 
 # @dataclasses.dataclass
@@ -57,14 +54,6 @@ REQUEST_LATENCY: list[tuple[int, int, float]] = []
 #     response = await context.session.post(url, headers=headers, data=json.dumps(data))
 #     chunk_gen = make_chunk_gen(response) if make_chunk_gen else None
 #     return ApiResult(context.index, start_time, response, chunk_gen)
-
-
-# def get_api_key(env_var: str) -> str:
-#     if args.api_key:
-#         return args.api_key
-#     if env_var in os.environ:
-#         return os.environ[env_var]
-#     raise ValueError(f"Missing API key: {env_var}")
 
 
 def get_headers(*, auth_token: str | None = None, x_api_key: str | None = None) -> dict:
@@ -122,29 +111,35 @@ async def send_request(
         "temperature": 0.0,
         "stream": True,
     }
-    timeout = aiohttp.ClientTimeout(total=3 * 3600)
+    timeout = httpx.Timeout(3 * 3600)
     request_start_time = time.perf_counter()
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         while True:
-            async with session.post(api_url, headers=headers, json=payload) as response:
-                chunks = []
-                output_len = 0
-                async for chunk in response.content:
-                    if not chunks:
-                        time_to_first_token = time.perf_counter() - request_start_time
-                    chunk = chunk.decode("utf-8").strip()
-                    if chunk.startswith("data:"):
-                        data = chunk[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        data = json.loads(data)
-                        if data["choices"]:
-                            output_len += 1
-                            content = data["choices"][0]["delta"].get("content")
-                            if content:
-                                chunks.append(content)
+            response = await client.post(api_url, headers=headers, json=payload)
+
+            chunks = []
+            output_len = 0
+            time_to_first_token = None
+
+            # Stream the response
+            async for line in response.aiter_lines():
+                if not line and not time_to_first_token:
+                    time_to_first_token = time.perf_counter() - request_start_time
+
+                line = line.strip()
+                if line.startswith("data:"):
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    data = json.loads(data)
+                    if data["choices"]:
+                        output_len += 1
+                        content = data["choices"][0]["delta"].get("content")
+                        if content:
+                            chunks.append(content)
 
             output = "".join(chunks)
+
             # Re-send the request if it failed.
             if "error" not in output:
                 break
@@ -153,7 +148,7 @@ async def send_request(
     request_latency = request_end_time - request_start_time
     REQUEST_LATENCY.append((prompt_len, output_len, request_latency))
     # print(REQUEST_LATENCY, time_to_first_token, output_len)
-    print(f"time to first token: {time_to_first_token:.2f} s")
+    print(f"time to first token: {time_to_first_token * 1000:.2f} ms")
 
 
 async def benchmark(
@@ -179,10 +174,11 @@ def main(args: argparse.Namespace):
     # tokenizer = get_tokenizer(args.tokenizer, trust_remote_code=args.trust_remote_code)
     # input_requests = sample_requests(args.dataset, args.num_prompts, tokenizer)
 
-    # requests: prompt, input_len, output_len
-    input_requests = [(DEFAULT_PROMPT, 3, 4000)] * 20
+    num_prompts = args.num_prompts
+    # requests: prompt, input_len, max_len
+    input_requests = [(DEFAULT_PROMPT, 3, 4000)] * num_prompts
 
-    request_rate = 20 / 60  # 20 requests per minute
+    request_rate = args.request_rate
 
     benchmark_start_time = time.perf_counter()
     asyncio.run(
@@ -192,7 +188,8 @@ def main(args: argparse.Namespace):
     benchmark_time = benchmark_end_time - benchmark_start_time
 
     print(f"Total time: {benchmark_time:.2f} s")
-    print(f"Throughput: {5 / benchmark_time:.2f} requests/s")
+    print(f"Throughput: {num_prompts / benchmark_time:.2f} requests/s")
+    print(f"Throughput: {num_prompts / benchmark_time * 60:.2f} RPM")
 
     # Compute the latency statistics.
     avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
@@ -203,11 +200,14 @@ def main(args: argparse.Namespace):
             for prompt_len, output_len, latency in REQUEST_LATENCY
         ]
     )
-    print(f"Average latency per token: {avg_per_token_latency:.2f} s")
+    print(f"Average latency per token: {avg_per_token_latency*1000:.2f} ms")
     avg_per_output_token_latency = np.mean(
         [latency / output_len for _, output_len, latency in REQUEST_LATENCY]
     )
-    print("Average latency per output token: " f"{avg_per_output_token_latency:.2f} s")
+    print(
+        "Average latency per output token: "
+        f"{avg_per_output_token_latency*1000:.2f} ms"
+    )
 
 
 if __name__ == "__main__":
@@ -225,6 +225,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model", "-m", type=str, default="gpt-3.5-turbo", help="Model to benchmark"
     )
+    parser.add_argument(
+        "--num-prompts", type=int, default=5, help="Number of prompts to process."
+    )
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=20 / 60,  # float("inf"),
+        help="Number of requests per second. If this is inf, then all the requests are"
+        " sent at time 0. Otherwise, we use Poisson process to synthesize the request "
+        "arrival times.",
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--num-requests",
+        "-n",
+        type=int,
+        default=DEFAULT_NUM_REQUESTS,
+        help="Number of requests to make",
+    )
     # parser.add_argument(
     #     "--max-tokens",
     #     type=int,
@@ -235,30 +254,10 @@ if __name__ == "__main__":
     # #     "--dataset", type=str, required=True, help="Path to the dataset."
     # # )
     # parser.add_argument(
-    #     "--best-of",
-    #     type=int,
-    #     default=1,
-    #     help="Generates `best_of` sequences per prompt and " "returns the best one.",
-    # )
-    # parser.add_argument(
-    #     "--num-prompts", type=int, default=1000, help="Number of prompts to process."
-    # )
-    # parser.add_argument(
-    #     "--request-rate",
-    #     type=float,
-    #     default=float("inf"),
-    #     help="Number of requests per second. If this is inf, "
-    #     "then all the requests are sent at time 0. "
-    #     "Otherwise, we use Poisson process to synthesize "
-    #     "the request arrival times.",
-    # )
-    # parser.add_argument("--seed", type=int, default=0)
-    # parser.add_argument(
     #     "--trust-remote-code",
     #     action="store_true",
     #     help="trust remote code from huggingface",
     # )
-
     # parser.add_argument(
     #     "prompt",
     #     type=str,
@@ -266,20 +265,13 @@ if __name__ == "__main__":
     #     default=DEFAULT_PROMPT,
     #     help="Prompt to send to the API",
     # )
-
     # parser.add_argument(
     #     "--no-warmup",
     #     action="store_false",
     #     dest="warmup",
     #     help="Don't do a warmup call to the API",
     # )
-    # parser.add_argument(
-    #     "--num-requests",
-    #     "-n",
-    #     type=int,
-    #     default=DEFAULT_NUM_REQUESTS,
-    #     help="Number of requests to make",
-    # )
+
     # parser.add_argument(
     #     "--print",
     #     "-p",
