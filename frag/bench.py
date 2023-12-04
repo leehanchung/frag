@@ -14,7 +14,7 @@ load_dotenv()
 
 
 DEFAULT_PROMPT = "You are a helpful assistant that respeonds with the answer in the most concise possible way."
-DEFAULT_NUM_REQUESTS = 5
+DEFAULT_MAX_TOKENS = 4096
 
 REQUEST_LATENCY: list[tuple[int, int, float]] = []  # (prompt len, output len, latency)
 
@@ -210,10 +210,12 @@ def main(args: argparse.Namespace):
     )
 
 
-if __name__ == "__main__":
+def setup_parser():
     parser = argparse.ArgumentParser(
         description="Benchmark the online serving throughput."
     )
+
+    # API Server URL and Model configuration
     # For local testing, localhost:8000
     parser.add_argument(
         "--api-url",
@@ -225,10 +227,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model", "-m", type=str, default="gpt-3.5-turbo", help="Model to benchmark"
     )
+
+    # Request prompts configuration
+    # parser.add_argument(
+    #     "--dataset", type=str, required=True, help="Path to the dataset."
+    # )
     parser.add_argument(
         "--num-prompts", type=int, default=5, help="Number of prompts to process."
     )
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help="Max tokens for the response",
+    )
+
+    # Benchmarking configuration
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--request-rate",
         type=float,
         default=20 / 60,  # float("inf"),
@@ -236,42 +253,18 @@ if __name__ == "__main__":
         " sent at time 0. Otherwise, we use Poisson process to synthesize the request "
         "arrival times.",
     )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
+    group.add_argument(
         "--num-requests",
         "-n",
         type=int,
-        default=DEFAULT_NUM_REQUESTS,
-        help="Number of requests to make",
+        help="Number of concurrent requests to make",
     )
-    # parser.add_argument(
-    #     "--max-tokens",
-    #     type=int,
-    #     default=DEFAULT_MAX_TOKENS,
-    #     help="Max tokens for the response",
-    # )
-    # # parser.add_argument(
-    # #     "--dataset", type=str, required=True, help="Path to the dataset."
-    # # )
+
     # parser.add_argument(
     #     "--trust-remote-code",
     #     action="store_true",
     #     help="trust remote code from huggingface",
     # )
-    # parser.add_argument(
-    #     "prompt",
-    #     type=str,
-    #     nargs="?",
-    #     default=DEFAULT_PROMPT,
-    #     help="Prompt to send to the API",
-    # )
-    # parser.add_argument(
-    #     "--no-warmup",
-    #     action="store_false",
-    #     dest="warmup",
-    #     help="Don't do a warmup call to the API",
-    # )
-
     # parser.add_argument(
     #     "--print",
     #     "-p",
@@ -279,6 +272,7 @@ if __name__ == "__main__":
     #     dest="print",
     #     help="Print the response",
     # )
+
     # group = parser.add_mutually_exclusive_group()
     # group.add_argument(
     #     "--verbose",
@@ -293,5 +287,10 @@ if __name__ == "__main__":
     #     dest="minimal",
     #     help="Print minimal output",
     # )
-    args = parser.parse_args()
+
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = setup_parser()
     main(args)
